@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Mail, Lock, User, Eye, EyeOff, Apple, Phone, Camera, MapPin, IdCard, CheckCircle, Building, FileText, Banknote, ArrowLeft, Upload, FileUp, ShieldCheck, ChevronRight, Users, X, Calendar, Clock, Car, Truck, Bus, Train, Globe, DollarSign, Smartphone, Star, Info, AlertCircle, Loader2 } from 'lucide-react';
+import { useGoogleLogin } from '@react-oauth/google';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PhoneInput } from '@/components/ui/phone-input';
@@ -190,18 +191,31 @@ export function SignUpForm({ initialRole }: { initialRole?: string }) {
     }
   };
 
-  const handleGoogleAuth = async () => {
-    if (googleLoading) return;
-    setGoogleError('');
-    setGoogleLoading(true);
+  const handleGoogleAuthSuccess = async (tokenResponse: { access_token?: string }) => {
+    if (!tokenResponse.access_token) {
+      setGoogleError('Google authentication failed: no access token received');
+      setGoogleLoading(false);
+      return;
+    }
 
     try {
-      const googleEmail = `user_${Date.now()}@google.auth`;
-      const googleName = 'Google User';
+      const profileRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+      });
+      if (!profileRes.ok) {
+        throw new Error('Failed to fetch Google profile');
+      }
+
+      const profile = await profileRes.json();
       const res = await fetch('/api/auth/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: googleEmail, name: googleName, avatar: '' }),
+        body: JSON.stringify({
+          email: profile.email,
+          name: profile.name || profile.email?.split('@')[0] || 'Google User',
+          avatar: profile.picture || '',
+          googleId: profile.sub,
+        }),
       });
 
       if (!res.ok) {
@@ -220,6 +234,24 @@ export function SignUpForm({ initialRole }: { initialRole?: string }) {
     } finally {
       setGoogleLoading(false);
     }
+  };
+
+  const googleLogin = useGoogleLogin({
+    onSuccess: handleGoogleAuthSuccess,
+    onError: () => {
+      setGoogleError('Google sign-in failed');
+      setGoogleLoading(false);
+    },
+    flow: 'implicit',
+    scope: 'openid email profile',
+    prompt: 'select_account',
+  });
+
+  const handleGoogleAuth = () => {
+    if (googleLoading) return;
+    setGoogleError('');
+    setGoogleLoading(true);
+    googleLogin();
   };
 
   const handleDriverRegister = async () => {

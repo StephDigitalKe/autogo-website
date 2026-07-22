@@ -4,12 +4,13 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Mail, Lock, Eye, EyeOff, Apple, Loader2 } from 'lucide-react';
+import { GoogleOAuthProvider, useGoogleLogin } from '@react-oauth/google';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/context/AuthContext';
 import { restoreGuestSession, clearGuestSession } from '@/components/auth/AutoSaveIntent';
 
-export default function SignInPage() {
+function SignInForm() {
   const { login } = useAuth();
   const router = useRouter();
   const [showPassword, setShowPassword] = useState(false);
@@ -58,32 +59,104 @@ export default function SignInPage() {
     }
   };
 
-  const handleGoogleSignIn = async () => {
-    setGoogleLoading(true);
-    setSignInError('');
+  const handleGoogleSignInSuccess = async (tokenResponse: { access_token?: string }) => {
+    if (!tokenResponse.access_token) {
+      setSignInError('Google authentication failed: no access token received');
+      setGoogleLoading(false);
+      return;
+    }
+
     try {
-      // Simulate Google OAuth — in production this would use @react-oauth/google
-      const googleEmail = `user_${Date.now()}@google.auth`;
-      const googleName = 'Google User';
+      const profileRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${tokenResponse.access_token}` },
+      });
+      if (!profileRes.ok) {
+        throw new Error('Failed to fetch Google profile');
+      }
+
+      const profile = await profileRes.json();
       const res = await fetch('/api/auth/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: googleEmail, name: googleName, avatar: '' }),
+        body: JSON.stringify({
+          email: profile.email,
+          name: profile.name || profile.email?.split('@')[0] || 'Google User',
+          avatar: profile.picture || '',
+          googleId: profile.sub,
+        }),
       });
-      if (!res.ok) throw new Error('Google sign-in failed');
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Google sign-in failed' }));
+        throw new Error(err.error || 'Google sign-in failed');
+      }
+
       const data = await res.json();
       if (!data.token) throw new Error('No token received');
+
       await login(data.token);
       router.push('/dashboard');
     } catch (err) {
       setSignInError(err instanceof Error ? err.message : 'Google sign-in failed');
-    } finally {
       setGoogleLoading(false);
     }
   };
 
+  const googleLogin = useGoogleLogin({
+    onSuccess: handleGoogleSignInSuccess,
+    onError: () => {
+      setSignInError('Google sign-in failed');
+      setGoogleLoading(false);
+    },
+    flow: 'implicit',
+    scope: 'openid email profile',
+    prompt: 'select_account',
+  });
+
+  const handleGoogleSignIn = () => {
+    setGoogleLoading(true);
+    setSignInError('');
+    googleLogin();
+  };
+
+  const signInStyles = `
+    @keyframes driveInPark {
+      0% {
+        opacity: 0;
+        transform: translateX(180px) scale(0.92);
+        filter: blur(4px);
+      }
+      60% {
+        opacity: 1;
+        transform: translateX(-8px) scale(1.01);
+        filter: blur(0);
+      }
+      80% {
+        transform: translateX(4px);
+      }
+      100% {
+        opacity: 1;
+        transform: translateX(0) scale(1);
+        filter: blur(0);
+      }
+    }
+    @keyframes gentleFloat {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-8px); }
+    }
+    @keyframes lightSweep {
+      0% { transform: translateX(0); }
+      50% { transform: translateX(300%); }
+      100% { transform: translateX(300%); }
+    }
+    @keyframes fadeInUp {
+      0% { opacity: 0; transform: translateY(20px); }
+      100% { opacity: 1; transform: translateY(0); }
+    }
+  `;
+
   return (
-    <div className="min-h-screen flex">
+      <div className="min-h-screen flex">
       {/* Left - Prado Showcase Panel */}
       <div className={`hidden lg:flex flex-1 relative overflow-hidden bg-gradient-to-br from-slate-950 via-gray-950 to-slate-900 transition-all duration-1000 delay-200 ${mounted ? 'opacity-100' : 'opacity-0'}`}>
 
@@ -309,41 +382,15 @@ export default function SignInPage() {
         </div>
       </div>
 
-      <style jsx>{`
-        @keyframes driveInPark {
-          0% {
-            opacity: 0;
-            transform: translateX(180px) scale(0.92);
-            filter: blur(4px);
-          }
-          60% {
-            opacity: 1;
-            transform: translateX(-8px) scale(1.01);
-            filter: blur(0);
-          }
-          80% {
-            transform: translateX(4px);
-          }
-          100% {
-            opacity: 1;
-            transform: translateX(0) scale(1);
-            filter: blur(0);
-          }
-        }
-        @keyframes gentleFloat {
-          0%, 100% { transform: translateY(0px); }
-          50% { transform: translateY(-8px); }
-        }
-        @keyframes lightSweep {
-          0% { transform: translateX(0); }
-          50% { transform: translateX(300%); }
-          100% { transform: translateX(300%); }
-        }
-        @keyframes fadeInUp {
-          0% { opacity: 0; transform: translateY(20px); }
-          100% { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
+      <style dangerouslySetInnerHTML={{ __html: signInStyles }} />
     </div>
+  );
+}
+
+export default function SignInPage() {
+  return (
+    <GoogleOAuthProvider clientId={process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || ''}>
+      <SignInForm />
+    </GoogleOAuthProvider>
   );
 }
